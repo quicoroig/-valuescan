@@ -57,7 +57,10 @@ def pick_tournaments(k, ts):
 def scan(a):
     try:
         acc = api("/account")
-        print(f"Cuenta OddsPapi: {acc.get('request_count')}/{acc.get('request_limit')} peticiones usadas este periodo")
+        sub = acc.get("subscription") or acc
+        rc = sub.get("request_count", acc.get("request_count"))
+        rl = sub.get("request_limit", acc.get("request_limit"))
+        print(f"Cuenta OddsPapi: {rc}/{rl} peticiones usadas este periodo — {json.dumps(acc)[:300]}")
     except Exception as e:
         print("No se pudo leer /account:", e)
     now = time.time(); lim = now + a.hours * 3600
@@ -81,18 +84,27 @@ def scan(a):
         tname = {t["tournamentId"]: t.get("tournamentName") for t in ts}
         ids = [t["tournamentId"] for t in ts]
         print(f"{k}: {len(ids)} competiciones")
-        bk = ",".join([books["pinnacle"], *soft.values()])
-        def fetch(batch):
+        all_books = [books["pinnacle"], *soft.values()]
+        def fetch_one_book(batch, bookslug):
             try:
-                fx = api("/odds-by-tournaments", tournamentIds=",".join(map(str, batch)), bookmakers=bk, verbosity=3)
+                fx = api("/odds-by-tournaments", tournamentIds=",".join(map(str, batch)), bookmaker=bookslug, verbosity=3)
                 return fx if isinstance(fx, list) else list(fx.values())
             except urllib.error.HTTPError as e:
                 if e.code == 400 and len(batch) > 1:
-                    print("  reintento uno a uno…"); out = []
-                    for t in batch: out += fetch([t])
+                    out = []
+                    for t in batch: out += fetch_one_book([t], bookslug)
                     return out
-                if e.code == 400: print(f"  competición {batch[0]} omitida"); return []
-                raise
+                print(f"  {bookslug}: competición(es) {batch} omitida(s) ({e.code})"); return []
+        def fetch(batch):
+            merged = {}
+            for bookslug in all_books:
+                for f in fetch_one_book(batch, bookslug):
+                    fx = merged.setdefault(f["fixtureId"], f)
+                    if fx is not f:
+                        fx.setdefault("bookmakerOdds", {}).update(f.get("bookmakerOdds", {}))
+                    else:
+                        fx.setdefault("bookmakerOdds", fx.get("bookmakerOdds", {}))
+            return list(merged.values())
         for j in range(0, len(ids), 12):
             for f in fetch(ids[j:j+12]):
                 st = datetime.datetime.fromisoformat(f["startTime"].replace("Z", "+00:00")).timestamp()
