@@ -15,11 +15,10 @@ bosnia north-macedonia albania montenegro kosovo lithuania latvia estonia belaru
 luxembourg malta moldova faroe-islands andorra gibraltar san-marino liechtenstein europe international world uefa""".split())
 BAD = re.compile(r"women|femen|feminine|u-?1\d|u-?2[0-3]|youth|junior|reserve|amateur|friendly|amistoso|esports|simulated|virtual|itf|challenger|doubles|dobles|futures|legends|indoor|beach|3x3", re.I)
 RULES = {
-  "football":   lambda t: t["cat"] in EU and (t["n"] >= 30 or re.search(r"champions|europa|conference|nations|euro|world-cup|copa|cup|pokal|coupe|coppa", t["slug"])),
-  "basketball": lambda t: (t["cat"] in EU or t["cat"] == "usa") and (t["n"] >= 12 or re.search(r"nba|euroleague|eurocup|acb|endesa|bbl|lnb|lega|bsl|vtb", t["slug"])),
-  "tennis":     lambda t: re.search(r"atp|wta|grand-slam|wimbledon|roland|us-open|australian|masters|finals|davis|billie", t["slug"] + " " + t["cat"]) and t["n"] >= 2,
+  "football": lambda t: any(x in t["slug"] for x in TOP_LEAGUE_SLUGS),
 }
-SPORT_KEYS = {"football": ["football", "soccer"], "basketball": ["basketball"], "tennis": ["tennis"]}
+SPORT_KEYS = {"football": ["football", "soccer"]}
+TOP_LEAGUE_SLUGS = ["laliga", "la-liga", "segunda", "laliga2", "laliga-2", "hypermotion", "primera-rfef", "primerafef", "primera-federacion"]
 _last = 0
 def api(path, **params):
     global _last
@@ -52,7 +51,16 @@ def pick_tournaments(k, ts):
         if d["n"] > 0 and not BAD.search(d["slug"] + " " + (t.get("tournamentName") or "")) and RULES[k](d):
             out.append(d)
     out.sort(key=lambda t: -t["n"])
-    return out[: 40 if k == "tennis" else 80]
+    return out[:5]
+
+BUDGET = 60  # margen de seguridad bajo el límite del plan gratuito (250 total)
+_calls = [0]
+_orig_api = api
+def api(path, **kw):
+    if _calls[0] >= BUDGET:
+        raise SystemExit(f"Presupuesto de {BUDGET} peticiones agotado en este escaneo para no gastar todo tu plan mensual. Reduce ligas o sube de plan.")
+    _calls[0] += 1
+    return _orig_api(path, **kw)
 
 def scan(a):
     try:
@@ -90,10 +98,8 @@ def scan(a):
                 fx = api("/odds-by-tournaments", tournamentIds=",".join(map(str, batch)), bookmaker=bookslug, verbosity=3)
                 return fx if isinstance(fx, list) else list(fx.values())
             except urllib.error.HTTPError as e:
-                if e.code == 400 and len(batch) > 1:
-                    out = []
-                    for t in batch: out += fetch_one_book([t], bookslug)
-                    return out
+                if e.code == 404:
+                    return []  # sin partidos para esa casa/liga ahora mismo: normal, no reintentar
                 print(f"  {bookslug}: competición(es) {batch} omitida(s) ({e.code})"); return []
         def fetch(batch):
             merged = {}
@@ -105,7 +111,7 @@ def scan(a):
                     else:
                         fx.setdefault("bookmakerOdds", fx.get("bookmakerOdds", {}))
             return list(merged.values())
-        for j in range(0, len(ids), 12):
+        for j in range(0, len(ids), 5):
             for f in fetch(ids[j:j+12]):
                 st = datetime.datetime.fromisoformat(f["startTime"].replace("Z", "+00:00")).timestamp()
                 if not (now < st < lim) or (f.get("statusId") or 0) >= 2: continue
