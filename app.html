@@ -316,10 +316,19 @@ async function scan(){
       const names=cat.participants[sk]||{};
       const tnames=Object.fromEntries(cat.tournaments[sk].map(t=>[t.id,t.name]));
       log('Cuotas '+sk+' ('+ids.length+' competiciones)…');
-      const fx=[];const B=12;
+      const fx=[];const B=12;const allBooks=[cat.bookSlugs.pinnacle,...soft];
       for(let j=0;j<ids.length;j+=B){
-        const chunk=await api('/odds-by-tournaments',{tournamentIds:ids.slice(j,j+B).join(','),bookmakers:[cat.bookSlugs.pinnacle,...soft].join(','),verbosity:3});
-        fx.push(...(Array.isArray(chunk)?chunk:Object.values(chunk)));
+        const batch=ids.slice(j,j+B);const merged={};
+        for(const bookslug of allBooks){
+          let chunk;
+          try{chunk=await api('/odds-by-tournaments',{tournamentIds:batch.join(','),bookmaker:bookslug,verbosity:3})}
+          catch(e){log('  '+bookslug+': competición(es) omitida(s) — '+e.message);continue}
+          for(const f of (Array.isArray(chunk)?chunk:Object.values(chunk))){
+            if(!merged[f.fixtureId])merged[f.fixtureId]=f;
+            else Object.assign(merged[f.fixtureId].bookmakerOdds??={},f.bookmakerOdds||{});
+          }
+        }
+        fx.push(...Object.values(merged));
         prog(20+70*((i+Math.min(1,(j+B)/ids.length))/active.length));
       }
       i++;
