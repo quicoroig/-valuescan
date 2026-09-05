@@ -171,8 +171,8 @@ body{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
   <div class="gtitle">Deportes</div>
   <div class="group"><div class="chips" id="sports">
     <div class="chip on" data-s="football">⚽ Fútbol</div>
-    <div class="chip on" data-s="basketball">🏀 Baloncesto</div>
-    <div class="chip on" data-s="tennis">🎾 Tenis</div>
+    <div class="chip" data-s="basketball">🏀 Baloncesto</div>
+    <div class="chip" data-s="tennis">🎾 Tenis</div>
   </div></div>
 
   <div class="gtitle">Casas a escanear</div>
@@ -214,7 +214,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 /* ---------- settings ---------- */
 const S=Object.assign({key:'',proxy:'',bank:1000,kelly:0.25,maxpct:3,minval:20,minsure:10,maxodd:6,hours:48,
-  sports:['football','basketball','tennis'],books:['bet365','winamax'],hour:'09:00',auto:true},store.get('settings',{}));
+  sports:['football'],books:['bet365','winamax'],hour:'09:00',auto:true},store.get('settings',{}));
 function bindSettings(){
   for(const id of ['key','proxy','bank','kelly','maxpct','minval','minsure','maxodd','hours','hour']){
     const el=$('#'+id);el.value=S[id];
@@ -232,8 +232,9 @@ const save=()=>store.set('settings',S);
 
 /* ---------- API ---------- */
 const BASE='https://api.oddspapi.io/v4';
-let lastCall=0;
+let lastCall=0,callCount=0;const BUDGET=60;
 async function api(path,params={}){
+  if(callCount++>=BUDGET)throw new Error('Presupuesto de '+BUDGET+' peticiones agotado en este escaneo (protege tu cuota mensual).');
   const q=new URLSearchParams({...params,apiKey:S.key}).toString();
   const wait=1100-(Date.now()-lastCall);if(wait>0)await sleep(wait);lastCall=Date.now();
   const urls=[];
@@ -251,17 +252,12 @@ async function api(path,params={}){
 
 /* ---------- catalog (cached 24h) ---------- */
 const SPORT_KEYS={football:['football','soccer'],basketball:['basketball'],tennis:['tennis']};
-const EU=['spain','england','italy','germany','france','portugal','netherlands','belgium','scotland','turkey','greece','austria','switzerland','denmark','sweden','norway','poland','czech-republic','czechia','croatia','serbia','ukraine','russia','romania','hungary','bulgaria','slovakia','slovenia','ireland','wales','northern-ireland','iceland','finland','cyprus','israel','bosnia-and-herzegovina','bosnia','north-macedonia','albania','montenegro','kosovo','lithuania','latvia','estonia','belarus','georgia','armenia','azerbaijan','luxembourg','malta','moldova','faroe-islands','andorra','gibraltar','san-marino','liechtenstein','europe','international','world','uefa'];
-const BAD=/women|femen|feminine|u-?1\d|u-?2[0-3]|youth|junior|reserve|amateur|friendly|amistoso|esports|simulated|virtual|itf|challenger|doubles|dobles|futures|legends|indoor|beach|3x3/i;
-const RULES={
-  football:t=>EU.includes(t.cat)&&(t.n>=30||/champions|europa|conference|nations|euro|world-cup|copa|cup|pokal|coupe|coppa/.test(t.slug)),
-  basketball:t=>(EU.includes(t.cat)||t.cat==='usa')&&(t.n>=12||/nba|euroleague|eurocup|acb|endesa|bbl|lnb|lega|bsl|vtb/.test(t.slug)),
-  tennis:t=>/atp|wta|grand-slam|wimbledon|roland|us-open|australian|masters|finals|davis|billie/.test(t.slug+' '+t.cat)&&t.n>=2
-};
+const TOP_LEAGUE_SLUGS=['laliga','la-liga','segunda','laliga2','laliga-2','hypermotion','primera-rfef','primerafef','primera-federacion'];
+const RULES={football:t=>TOP_LEAGUE_SLUGS.some(x=>t.slug.includes(x))};
 function pickTournaments(k,ts){
   return ts.map(t=>({...t,cat:(t.categorySlug||t.categoryName||'').toLowerCase(),slug:(t.tournamentSlug||t.tournamentName||'').toLowerCase(),n:(t.futureFixtures||0)+(t.upcomingFixtures||0)+(t.liveFixtures||0)}))
-    .filter(t=>t.n>0&&!BAD.test(t.slug+' '+(t.tournamentName||''))&&RULES[k](t))
-    .sort((a,b)=>b.n-a.n).slice(0,k==='tennis'?40:80);
+    .filter(t=>t.n>0&&RULES[k]&&RULES[k](t))
+    .sort((a,b)=>b.n-a.n).slice(0,5);
 }
 async function catalog(){
   const c=store.get('catalog');
@@ -316,13 +312,13 @@ async function scan(){
       const names=cat.participants[sk]||{};
       const tnames=Object.fromEntries(cat.tournaments[sk].map(t=>[t.id,t.name]));
       log('Cuotas '+sk+' ('+ids.length+' competiciones)…');
-      const fx=[];const B=12;const allBooks=[cat.bookSlugs.pinnacle,...soft];
+      const fx=[];const B=5;const allBooks=[cat.bookSlugs.pinnacle,...soft];
       for(let j=0;j<ids.length;j+=B){
         const batch=ids.slice(j,j+B);const merged={};
         for(const bookslug of allBooks){
           let chunk;
           try{chunk=await api('/odds-by-tournaments',{tournamentIds:batch.join(','),bookmaker:bookslug,verbosity:3})}
-          catch(e){log('  '+bookslug+': competición(es) omitida(s) — '+e.message);continue}
+          catch(e){if(!/404/.test(e.message))log('  '+bookslug+': competición(es) omitida(s) — '+e.message);continue}
           for(const f of (Array.isArray(chunk)?chunk:Object.values(chunk))){
             if(!merged[f.fixtureId])merged[f.fixtureId]=f;
             else Object.assign(merged[f.fixtureId].bookmakerOdds??={},f.bookmakerOdds||{});
