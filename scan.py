@@ -27,9 +27,16 @@ def api(path, **params):
     if w > 0: time.sleep(w)
     _last = time.time()
     params["apiKey"] = KEY
-    req = urllib.request.Request(f"{API}{path}?{urllib.parse.urlencode(params)}", headers={"User-Agent": "ValueScan/1.0"})
-    with urllib.request.urlopen(req, timeout=90) as r:
-        return json.load(r)
+    url = f"{API}{path}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "ValueScan/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")[:600]
+        shown = {k: v for k, v in params.items() if k != "apiKey"}
+        print(f"\n[API {e.code}] {path} {shown}\n{body}\n")
+        raise
 
 def find_book(bms, want, es=True):
     slugs = [b.get("bookmakerSlug") or b.get("slug") or "" for b in bms]
@@ -57,21 +64,32 @@ def scan(a):
             if k not in sport_ids and any(slug == x or x in slug for x in keys): sport_ids[k] = s["sportId"]
     bms = api("/bookmakers")
     books = {"pinnacle": find_book(bms, "pinnacle", False), **{b: find_book(bms, b) for b in a.books.split(",")}}
-    print("Casas:", books)
+    print("Deportes:", sport_ids); print("Casas:", books)
     if not books["pinnacle"]: sys.exit("Pinnacle no disponible en tu plan.")
     soft = {b: s for b, s in books.items() if b != "pinnacle" and s}
     markets = {str(m["marketId"]): m for m in api("/markets")}
     found = []; nfx = 0
     for k, sid in sport_ids.items():
         ts = pick_tournaments(k, api("/tournaments", sportId=sid))
-        names = api("/participants", sportId=sid, language="es")
+        try: names = api("/participants", sportId=sid, language="es")
+        except urllib.error.HTTPError: names = api("/participants", sportId=sid)
         tname = {t["tournamentId"]: t.get("tournamentName") for t in ts}
         ids = [t["tournamentId"] for t in ts]
         print(f"{k}: {len(ids)} competiciones")
+        bk = ",".join([books["pinnacle"], *soft.values()])
+        def fetch(batch):
+            try:
+                fx = api("/odds-by-tournaments", tournamentIds=",".join(map(str, batch)), bookmakers=bk, verbosity=3)
+                return fx if isinstance(fx, list) else list(fx.values())
+            except urllib.error.HTTPError as e:
+                if e.code == 400 and len(batch) > 1:
+                    print("  reintento uno a uno…"); out = []
+                    for t in batch: out += fetch([t])
+                    return out
+                if e.code == 400: print(f"  competición {batch[0]} omitida"); return []
+                raise
         for j in range(0, len(ids), 12):
-            fx = api("/odds-by-tournaments", tournamentIds=",".join(map(str, ids[j:j+12])),
-                     bookmakers=",".join([books["pinnacle"], *soft.values()]), verbosity=3)
-            for f in (fx if isinstance(fx, list) else fx.values()):
+            for f in fetch(ids[j:j+12]):
                 st = datetime.datetime.fromisoformat(f["startTime"].replace("Z", "+00:00")).timestamp()
                 if not (now < st < lim) or (f.get("statusId") or 0) >= 2: continue
                 nfx += 1
