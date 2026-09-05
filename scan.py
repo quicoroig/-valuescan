@@ -55,6 +55,11 @@ def pick_tournaments(k, ts):
     return out[: 40 if k == "tennis" else 80]
 
 def scan(a):
+    try:
+        acc = api("/account")
+        print(f"Cuenta OddsPapi: {acc.get('request_count')}/{acc.get('request_limit')} peticiones usadas este periodo")
+    except Exception as e:
+        print("No se pudo leer /account:", e)
     now = time.time(); lim = now + a.hours * 3600
     sports = api("/sports")
     sport_ids = {}
